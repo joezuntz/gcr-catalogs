@@ -116,6 +116,82 @@ class DC2TruthCatalogReader(BaseGenericCatalog):
         return default
 
 
+def convert_mag_to_nanoJansky(mag):
+    """Convert an AB mag to nanoJansky (for a constant flux-density source).
+
+    For a constant df/dnu source
+    """
+    AB_mag_zp_wrt_Jansky = 8.90  # Definition of AB
+    AB_mag_zp_wrt_nanoJansky = 2.5 * 9 + AB_mag_zp_wrt_Jansky  # 9 is from nano=10**(-9)
+
+    return 10**(-0.4 * (mag - AB_mag_zp_wrt_nanoJansky))
+
+
+def convert_nanoJansky_to_mag(flux):
+    """Convert a nanoJansky flux to AB mag (for a constant flux-density source).
+
+    For a constant df/dnu source
+    """
+    AB_mag_zp_wrt_Jansky = 8.90  # Definition of AB
+    AB_mag_zp_wrt_nanoJansky = 2.5 * 9 + AB_mag_zp_wrt_Jansky  # 9 is from nano=10**(-9)
+
+    return -2.5 * np.log10(flux) + AB_mag_zp_wrt_nanoJansky
+
+
+class DC2EmulateCatalogLightCurveReader(DC2TruthCatalogLightCurveReader)
+    def _subclass_init(self, **kwargs):
+        self._seed_salt = 20190228  # Phil Marshall's birthday
+
+    # Here are the generate_modifiers entries to take truth->emulate
+    @classmethod
+    def emulate_uncertainty(filt, mag_true):
+        """Take an input mag and filter and re-sample with Gaussian noise
+
+        Returns
+        ---
+        mag, mag_err, flux, flux_err
+
+
+        This is appropriate for sky-background-dominated noise
+        Filter-dependent sigma re-sampling, currently hard-coded.
+        """
+        from numpy import random
+
+        five_sigma_mag_floor = {'u': 27.5, 'g': 27.5, 'r': 27.5,
+                                'i': 27.5, 'z': 27.5, 'y': 27.5}  # in mag
+        five_sigma_flux_err = {f: convert_mag_to_nanoJansky(m)
+                               for f, m in five_sigma_mag_floor.items()}
+        one_sigma_flux_err = {f: err/5 for f, err in five_sigma_flux_err.items()}
+
+        flux_true = convert_mag_to_nanoJansky(mag_true)
+        flux_err = one_sigma_flux_err[filt] * np.ones_like(mag_true)
+        flux_emulated = random.normal(scale=flux_err, seed=seed)
+        flux_err_emulated = flux_err * np.ones_like(mag_true)
+
+        mag_emulated = convert_nanoJansky_to_mag(flux_emulated)
+        mag_err_emulated = (2.5/2) * np.log10((flux_emulated + flux_err) /
+                                              (flux_emulated - flux_err))
+
+        return mag_emulated, mag_err_emulated, flux_emulated, flux_err_emulated
+
+    def _iter_native_dataset(self, native_filters=None):
+        """Use the Truth catalog generator and then replace columns"""
+        while 1:
+            data = yield from super()._iter_native_dataset(native_filters=native_filters)
+            # seed from salt + objectId
+            seed = self._seed_salt + data['uniqueId']
+            mag_emulated, mag_err_emulated, flux_emulated, flux_err_emulated =
+                self.emulate_uncertainty(data['mag'], seed=seed)
+            filter_name_from_num = {0: 'u', 1: 'g', 2: 'r', 3: 'i', 4: 'z', 5: 'y'}
+            filt = filter_name_from_num[data['filter']]
+            data['mag_{}'.format(filt)] = mag_emulated
+            data['magerr_{}'.format(filt)] = mag_err_emulated
+            data['psFlux_{}'.format(filt)] = flux_emulated
+            data['psFluxErr_{}'.format(filt)] = flux_emulated
+
+        yield data
+
+
 class DC2TruthCatalogLightCurveReader(BaseGenericCatalog):
     """
     DC2 truth catalog reader for light curves
