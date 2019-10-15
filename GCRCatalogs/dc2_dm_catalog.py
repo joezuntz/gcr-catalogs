@@ -113,7 +113,7 @@ class ParquetFileWrapper():
 
     def read_columns(self, columns, as_dict=False):
         ncol = len(columns)
-        print("Reading {} columns from file {}".format(n, self.path))
+        print("Reading {} columns from file {}".format(ncol, self.path))
         d = self.handle.read(columns=columns).to_pandas()
         if as_dict:
             return {c: d[c].values for c in columns}
